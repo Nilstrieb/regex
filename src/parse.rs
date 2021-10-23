@@ -23,11 +23,10 @@ use std::str::Chars;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Regex {
     Choice(Box<Regex>, Box<Regex>),
-    Sequence(Box<Regex>, Box<Regex>),
+    Sequence(Vec<Regex>),
     Repetition(Box<Regex>),
     Primitive(char),
     Char(char),
-    Blank,
 }
 
 #[derive(Debug)]
@@ -75,18 +74,19 @@ impl<'a> Parser<'a> {
         }
     }
 
+    /// a term is a sequence of factors
     fn term(&mut self) -> RegexResult {
-        let mut factor = Regex::Blank;
+        let mut sequence = Vec::new();
 
         loop {
             if let None | Some(')') | Some('|') = self.peek() {
                 break;
             }
             let next_factor = self.factor()?;
-            factor = Regex::Sequence(Box::new(factor), Box::new(next_factor));
+            sequence.push(next_factor);
         }
 
-        Ok(factor)
+        Ok(Regex::Sequence(sequence))
     }
 
     fn factor(&mut self) -> RegexResult {
@@ -124,7 +124,11 @@ impl<'a> Parser<'a> {
 
 #[cfg(test)]
 mod test {
-    use crate::parse::{Parser, Regex};
+    use crate::parse::{Parser, Regex, Regex::*};
+
+    fn box_seq(elements: Vec<Regex>) -> Box<Regex> {
+        Box::new(Sequence(elements))
+    }
 
     #[test]
     fn simple_choice() {
@@ -132,7 +136,7 @@ mod test {
         let parsed = Parser::parse(regex).unwrap();
         assert_eq!(
             parsed,
-            Regex::Choice(Box::new(Regex::Char('a')), Box::new(Regex::Char('b')))
+            Choice(box_seq(vec![Char('a')]), box_seq(vec![Char('b')]))
         )
     }
 
@@ -140,6 +144,6 @@ mod test {
     fn repetition() {
         let regex = "a*";
         let parsed = Parser::parse(regex).unwrap();
-        assert_eq!(parsed, Regex::Repetition(Box::new(Regex::Char('a'))))
+        assert_eq!(parsed, Sequence(vec![Repetition(Box::new(Char('a')))]))
     }
 }
