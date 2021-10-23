@@ -20,13 +20,14 @@
 use std::iter::Peekable;
 use std::str::Chars;
 
-#[derive(Debug)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Regex {
     Choice(Box<Regex>, Box<Regex>),
-    Term(Vec<Regex>),
+    Sequence(Box<Regex>, Box<Regex>),
     Repetition(Box<Regex>),
     Primitive(char),
     Char(char),
+    Blank,
 }
 
 #[derive(Debug)]
@@ -66,6 +67,7 @@ impl<'a> Parser<'a> {
     fn regex(&mut self) -> RegexResult {
         let term = self.term()?;
         if let Some('|') = self.peek() {
+            let _ = self.next();
             let rhs = self.regex()?;
             Ok(Regex::Choice(Box::new(term), Box::new(rhs)))
         } else {
@@ -74,17 +76,17 @@ impl<'a> Parser<'a> {
     }
 
     fn term(&mut self) -> RegexResult {
-        let mut factors = Vec::new();
+        let mut factor = Regex::Blank;
 
         loop {
-            match self.peek() {
-                None | Some('(') | Some('|') => break,
-                _ => {}
+            if let None | Some(')') | Some('|') = self.peek() {
+                break;
             }
             let next_factor = self.factor()?;
-            factors.push(next_factor);
+            factor = Regex::Sequence(Box::new(factor), Box::new(next_factor));
         }
-        Ok(Regex::Term(factors))
+
+        Ok(factor)
     }
 
     fn factor(&mut self) -> RegexResult {
@@ -97,6 +99,7 @@ impl<'a> Parser<'a> {
 
         Ok(base)
     }
+
     fn base(&mut self) -> RegexResult {
         match self.peek() {
             Some('(') => {
@@ -107,7 +110,7 @@ impl<'a> Parser<'a> {
             }
             Some('\\') => {
                 let _ = self.next();
-                let esc = self.next().ok_or_else(|| ())?;
+                let esc = self.next().ok_or(())?;
                 Ok(Regex::Primitive(esc))
             }
             Some(char) => {
@@ -120,4 +123,23 @@ impl<'a> Parser<'a> {
 }
 
 #[cfg(test)]
-mod test {}
+mod test {
+    use crate::parse::{Parser, Regex};
+
+    #[test]
+    fn simple_choice() {
+        let regex = "a|b";
+        let parsed = Parser::parse(regex).unwrap();
+        assert_eq!(
+            parsed,
+            Regex::Choice(Box::new(Regex::Char('a')), Box::new(Regex::Char('b')))
+        )
+    }
+
+    #[test]
+    fn repetition() {
+        let regex = "a*";
+        let parsed = Parser::parse(regex).unwrap();
+        assert_eq!(parsed, Regex::Repetition(Box::new(Regex::Char('a'))))
+    }
+}
