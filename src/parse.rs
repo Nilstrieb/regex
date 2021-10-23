@@ -25,8 +25,14 @@ pub enum Regex {
     Choice(Box<Regex>, Box<Regex>),
     Sequence(Vec<Regex>),
     Repetition(Box<Regex>),
-    Primitive(char),
+    Primitive(Primitive),
     Char(char),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Primitive {
+    Word,
+    Digit,
 }
 
 #[derive(Debug)]
@@ -111,7 +117,11 @@ impl<'a> Parser<'a> {
             Some('\\') => {
                 let _ = self.next();
                 let esc = self.next().ok_or(())?;
-                Ok(Regex::Primitive(esc))
+                Ok(Regex::Primitive(match esc {
+                    'w' => Primitive::Word,
+                    'd' => Primitive::Digit,
+                    _ => return Err(()),
+                }))
             }
             Some(char) => {
                 let _ = self.next();
@@ -130,14 +140,19 @@ mod test {
         Box::new(Sequence(elements))
     }
 
+    fn char_seq(char: char) -> Regex {
+        Sequence(vec![Char(char)])
+    }
+
+    fn box_char_seq(char: char) -> Box<Regex> {
+        Box::new(Sequence(vec![Char(char)]))
+    }
+
     #[test]
     fn simple_choice() {
         let regex = "a|b";
         let parsed = Parser::parse(regex).unwrap();
-        assert_eq!(
-            parsed,
-            Choice(box_seq(vec![Char('a')]), box_seq(vec![Char('b')]))
-        )
+        assert_eq!(parsed, Choice(box_char_seq('a'), box_char_seq('b')))
     }
 
     #[test]
@@ -145,5 +160,28 @@ mod test {
         let regex = "a*";
         let parsed = Parser::parse(regex).unwrap();
         assert_eq!(parsed, Sequence(vec![Repetition(Box::new(Char('a')))]))
+    }
+
+    #[test]
+    fn primitives() {
+        let regex = "\\w\\d";
+        let parsed = Parser::parse(regex).unwrap();
+        assert_eq!(
+            parsed,
+            Sequence(vec![
+                Primitive(super::Primitive::Word),
+                Primitive(super::Primitive::Digit)
+            ])
+        )
+    }
+
+    #[test]
+    fn groups() {
+        let regex = "(a)(bc)";
+        let parsed = Parser::parse(regex).unwrap();
+        assert_eq!(
+            parsed,
+            Sequence(vec![char_seq('a'), Sequence(vec![Char('b'), Char('c')])])
+        )
     }
 }
