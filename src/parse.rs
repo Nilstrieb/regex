@@ -3,7 +3,7 @@
 //! Inspired by [Matt Mights article](https://matt.might.net/articles/parsing-regex-with-recursive-descent/)
 //!
 //! Parses the regular expression using the following grammar
-//! ```text
+//! ```txt
 //! # e.g.   abc|c(de)*
 //! <regex> ::= <term> '|' <regex>
 //!          | term
@@ -15,9 +15,16 @@
 //! <base> ::= <char>
 //!         | '\' <char>
 //!         | '(' <regex> ')'
+//!         | '[' { <set-elem> } ']'
+//!
+//! <set-elem> ::= <char>
+//!             | <range>
+//!
+//! <range> ::= <char> '-' <char>
 //! ```
 
 use std::iter::Peekable;
+use std::ops::Range;
 use std::str::Chars;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -25,6 +32,8 @@ pub enum Regex {
     Choice(Box<Regex>, Box<Regex>),
     Sequence(Vec<Regex>),
     Repetition(Box<Regex>),
+    Set(Vec<Regex>),
+    Range(Range<char>),
     Primitive(Primitive),
     Char(char),
 }
@@ -36,7 +45,7 @@ pub enum Primitive {
 }
 
 #[derive(Debug)]
-struct Parser<'a> {
+pub struct Parser<'a> {
     chars: Peekable<Chars<'a>>,
 }
 
@@ -51,6 +60,7 @@ impl<'a> Parser<'a> {
         parser.regex()
     }
 
+    #[must_use]
     fn next(&mut self) -> Option<char> {
         self.chars.next()
     }
@@ -123,6 +133,15 @@ impl<'a> Parser<'a> {
                     _ => return Err(()),
                 }))
             }
+            Some('[') => {
+                let _ = self.next();
+                let mut elems = Vec::new();
+                while self.peek() != Some(']') {
+                    elems.push(self.set_elem()?);
+                }
+                let _ = self.next();
+                Ok(Regex::Set(elems))
+            }
             Some(char) => {
                 let _ = self.next();
                 Ok(Regex::Char(char))
@@ -130,15 +149,23 @@ impl<'a> Parser<'a> {
             None => Err(()),
         }
     }
+
+    fn set_elem(&mut self) -> RegexResult {
+        let first_char = self.next().ok_or(())?;
+
+        if let Some('-') = self.peek() {
+            let _ = self.next();
+            let second_char = self.next().ok_or(())?;
+            Ok(Regex::Range(first_char..second_char))
+        } else {
+            Ok(Regex::Char(first_char))
+        }
+    }
 }
 
 #[cfg(test)]
 mod test {
     use crate::parse::{Parser, Regex, Regex::*};
-
-    fn box_seq(elements: Vec<Regex>) -> Box<Regex> {
-        Box::new(Sequence(elements))
-    }
 
     fn char_seq(char: char) -> Regex {
         Sequence(vec![Char(char)])
@@ -182,6 +209,29 @@ mod test {
         assert_eq!(
             parsed,
             Sequence(vec![char_seq('a'), Sequence(vec![Char('b'), Char('c')])])
+        )
+    }
+
+    #[test]
+    fn set() {
+        let regex = "[ab]";
+        let parsed = Parser::parse(regex).unwrap();
+        assert_eq!(
+            parsed,
+            Sequence(vec![Regex::Set(vec![Regex::Char('a'), Regex::Char('b')])])
+        )
+    }
+
+    #[test]
+    fn set_range() {
+        let regex = "[a-zA-Z]";
+        let parsed = Parser::parse(regex).unwrap();
+        assert_eq!(
+            parsed,
+            Sequence(vec![Regex::Set(vec![
+                Regex::Range('a'..'z'),
+                Regex::Range('A'..'Z')
+            ])])
         )
     }
 }

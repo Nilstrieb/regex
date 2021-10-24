@@ -1,10 +1,5 @@
 mod parse;
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn it_works() {
-        let result = 2 + 2;
-        assert_eq!(result, 4);
-    }
+pub fn no_unused_code(regex: &str) {
+    let _ = parse::Parser::parse(regex);
 }
