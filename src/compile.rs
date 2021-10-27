@@ -19,12 +19,12 @@
 //! Should compile into the following state machine
 //!
 //! ```txt
-//!          {3} a    {2}
-//!          /-----(())
+//!          {3}      {2}
+//!          /--a--(())
 //! ( START )
-//!         \------()-----(())
-//!            b   /\   c
-//!             b |_|
+//!         \--b---()--c--(())
+//!                /\   
+//!               b_|
 //! ```
 //!
 //! For that, we compile each node individually
@@ -43,6 +43,104 @@
 //! Compiling the repeat node {5} returns it's index and also the char that leads to it.
 //! The char that leads to a repeat node is the one it repeats.
 //! For the char node {6}, it's very similar to the char node below the choice node {1}.
+//!
+//! Another example: /u(w|o)!/
+//!
+//! AST:  
+//! ```txt
+//! Seq
+//!  |-- Char(u)
+//!  |-- Choice
+//!         |-- Char(w)
+//!         |-- Char(o)
+//!  |-- Char(!)
+//! ```
+//!
+//! ```txt
+//!
+//!                 /-w--()--\
+//! ( START )--u--()          |--!-(())
+//!                 \-o--()--/
+//!
+//! ```
+//!
+//!
+//! AST nodes will become transitions in the FSM  
+//! FSM nodes are the connections in the AST
+//!
+//! This architecture mostly seems to work out, with the only problem currently being allocating nodes
+//! this appears to be something not every kind of regex part does.
+//!
+//! A char will allocate the node for its transition.  
+//! A seq won't to that, because the contents of the seq allocate everything, the seq is just a wrapper.  
+//! Now the question is: is seq unique and should be special cased, or can something like it exist?
+//!
+//! Does choice allocate a node? No, it does not, it only branches. So allocating seems like something
+//! that some kinds do, but not all of them.  
+//!
+//! So allocating is something that is not fundamental to the compilation, but handled by each node.
+
+type NodeIndex = usize;
+
+impl Compiler {
+    /// This function takes the node index of the previous node, constructs a new one as the target,
+    /// and then creates a transition from the previous to the new one, containing the condition
+    /// of the AST node it is compiling.
+    /// It returns
+    fn compile(&mut self, regex: &Regex, node_before: NodeIndex) -> NodeIndex {
+        match regex {
+            Regex::Char(char) => self.allocating(node_before, |_, _| TransitionType::Char(*char)),
+            Regex::Sequence(terms) => {
+                if let Some(first) = terms.first() {
+                    let trans_to_first = self.compile(first, 0);
+                } else {
+                    TransitionType::Always;
+                };
+                todo!()
+            }
+            Regex::Primitive(primitive) => self.allocating(node_before, |_, _| {
+                TransitionType::Primitive(match primitive {
+                    parse::Primitive::Word => Primitive::Word,
+                    parse::Primitive::Digit => Primitive::Digit,
+                })
+            }),
+            Regex::Choice(a, b) => {
+                todo!()
+            }
+            Regex::Repetition(_) => {
+                todo!()
+            }
+            Regex::Set(_) => {
+                todo!()
+            }
+            Regex::Range(_) => {
+                todo!()
+            }
+        }
+    }
+
+    fn allocating<F: FnOnce(&mut Node, NodeIndex) -> TransitionType>(
+        &mut self,
+        node_before: NodeIndex,
+        f: F,
+    ) -> NodeIndex {
+        let next_node_slot = self.reserve_node_slot();
+        let mut next_node = Node::default();
+        let this_condition = f(&mut next_node, next_node_slot);
+        // fill the placeholder with the node we just created, forget the placeholder
+        let _ = std::mem::replace(self.nodes.get_mut(next_node_slot).unwrap(), next_node);
+        self.nodes
+            .get_mut(node_before)
+            .unwrap()
+            .transitions
+            .push(Transition {
+                target_node: next_node_slot,
+                condition: this_condition,
+            });
+
+        next_node_slot
+    }
+}
 
 use crate::parse;
 use crate::parse::Regex;
@@ -59,6 +157,7 @@ enum TransitionType {
     Range(Range<char>),
     Primitive(Primitive),
     Char(char),
+    Always,
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -87,7 +186,10 @@ struct Compiler {
 fn compile(regex: &Regex) -> RegexFsm {
     let mut compiler = Compiler::default();
 
-    compiler.compile(regex);
+    // reserve the start node
+    compiler.reserve_node_slot();
+
+    compiler.compile(regex, 0);
 
     RegexFsm {
         nodes: compiler.nodes,
@@ -95,49 +197,10 @@ fn compile(regex: &Regex) -> RegexFsm {
 }
 
 impl Compiler {
-    /// Pushes a dummy node into the internal buffer and returns a new one that can be modified.
-    /// After the node is processed, it should replace the dummy node
-    fn new_node(&mut self) -> (Node, usize) {
+    /// Pushes a placeholder node into the internal buffer and returns it's index
+    fn reserve_node_slot(&mut self) -> NodeIndex {
         self.nodes.push(Node::default());
-        let node = Node::default();
-        (node, self.nodes.len() - 1)
-    }
-
-    /// Compiles a regex into the compiler and returns the index of the start node
-    fn compile(&mut self, regex: &Regex) -> Transition {
-        let (mut this_node, this_node_index) = self.new_node();
-
-        let condition_to_this = match regex {
-            Regex::Choice(a, b) => {
-                let a_trans = self.compile(&a);
-                let b_trans = self.compile(&b);
-                this_node.transitions.push(a_trans);
-                this_node.transitions.push(b_trans);
-                todo!()
-            }
-            Regex::Sequence(_) => {
-                todo!()
-            }
-            Regex::Repetition(_) => {
-                todo!()
-            }
-            Regex::Set(_) => {
-                todo!()
-            }
-            Regex::Range(_) => {
-                todo!()
-            }
-            Regex::Primitive(primitive) => TransitionType::Primitive(match primitive {
-                parse::Primitive::Word => Primitive::Word,
-                parse::Primitive::Digit => Primitive::Digit,
-            }),
-            Regex::Char(char) => TransitionType::Char(*char),
-        };
-        std::mem::replace(self.nodes.get_mut(this_node_index).unwrap(), this_node);
-        Transition {
-            target_node: this_node_index,
-            condition: condition_to_this,
-        }
+        self.nodes.len() - 1
     }
 }
 
